@@ -10,7 +10,10 @@
       "Bash(cargo check:*)",
       "Bash(cargo test:*)",
       "Bash(cargo install:*)",
-      "Bash(cargo tauri:*)"
+      "Bash(cargo tauri:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm install:*)",
+      "Bash(npx vitest:*)"
     ]
   },
   "disabledMcpjsonServers": [
