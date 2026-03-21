@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "./App.css";
 
 type MatchData = {
   currentMR: number;
   sessionChange: number;
+  lastDelta: number;
   wins: number;
   losses: number;
 };
@@ -50,17 +51,19 @@ function AnimatedNumber({ value }: { value: number }) {
 
 function App() {
   const [cfnId, setCfnId] = useState(() => localStorage.getItem("sf6_cfn_id") || "");
-  const [isPolling, setIsPolling] = useState(false);
+  const [isPolling, setIsPolling] = useState(() => !!localStorage.getItem("sf6_cfn_id"));
   const [status, setStatus] = useState("Idle");
-  const [stats, setStats] = useState<MatchData>({ currentMR: 0, sessionChange: 0, wins: 0, losses: 0 });
+  const [stats, setStats] = useState<MatchData>({ currentMR: 0, sessionChange: 0, lastDelta: 0, wins: 0, losses: 0 });
   const [showSettings, setShowSettings] = useState(false);
   const [scoreType, setScoreType] = useState<"MR" | "LP">("MR");
   const [battleHistory, setBattleHistory] = useState<BattleRecord[]>([]);
-  const [alwaysOnTop, setAlwaysOnTop] = useState(() => localStorage.getItem("sf6_top") === "true");
+  const [alwaysOnTop] = useState(() => localStorage.getItem("sf6_top") === "true");
   const [loginStatus, setLoginStatus] = useState<"idle" | "logging_in" | "logged_in">("idle");
 
   // Track initial MR for session change calculation
   const initialMR = useRef<number | null>(null);
+  const lastMR = useRef<number | null>(null);
+  const baselineReplayId = useRef<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem("sf6_top", alwaysOnTop ? "true" : "false");
@@ -72,7 +75,7 @@ function App() {
     const unlisten = listen<string>("cfn_user_code_detected", (event) => {
       const detectedCode = event.payload;
       console.log("Auto-detected User Code:", detectedCode);
-      if (detectedCode && detectedCode !== cfnId) {
+      if (detectedCode) {
         setCfnId(detectedCode);
         localStorage.setItem("sf6_cfn_id", detectedCode);
         setLoginStatus("logged_in");
@@ -104,15 +107,37 @@ function App() {
             const lp = leagueInfo.league_point ?? 0;
             const currentScore = scoreType === "MR" ? mr : lp;
 
+            const oldScore = lastMR.current;
+            lastMR.current = currentScore;
+            
             if (initialMR.current === null) {
               initialMR.current = currentScore;
+            }
+
+            let newLastDelta = 0;
+            if (oldScore !== null && currentScore !== oldScore) {
+               newLastDelta = currentScore - oldScore;
             }
 
             setStats(prev => ({
               ...prev,
               currentMR: currentScore,
               sessionChange: currentScore - (initialMR.current ?? currentScore),
+              lastDelta: newLastDelta !== 0 ? newLastDelta : prev.lastDelta
             }));
+
+            // Attach the MR change to the absolutely newest battle record if there's a change
+            if (newLastDelta !== 0) {
+               setBattleHistory(prevHistory => {
+                  if (prevHistory.length > 0 && prevHistory[0].mrChange === 0) {
+                      const newList = [...prevHistory];
+                      newList[0] = { ...newList[0], mrChange: newLastDelta };
+                      return newList;
+                  }
+                  return prevHistory;
+               });
+            }
+
             setStatus("✅ Profile data updated!");
           }
         }
@@ -134,19 +159,28 @@ function App() {
   }, [scoreType]);
 
   const parseBattleLog = (replays: any[]) => {
-    if (!replays || !Array.isArray(replays)) return;
+    if (!replays || !Array.isArray(replays) || replays.length === 0) return;
 
-    let wins = 0;
-    let losses = 0;
-    const records: BattleRecord[] = [];
+    if (baselineReplayId.current === null) {
+      baselineReplayId.current = replays[0].replay_id || replays[0].uploaded_at;
+      setStatus(`✅ Baseline set. Waiting for new matches...`);
+      return; 
+    }
+
+    let newWins = 0;
+    let newLosses = 0;
+    const newRecords: BattleRecord[] = [];
 
     for (const replay of replays) {
+      const id = replay.replay_id || replay.uploaded_at;
+      if (id === baselineReplayId.current) {
+        break; // reached the previously parsed matches
+      }
+
       try {
-        // Typical Buckler battlelog replay structure
         const player1 = replay.player1_info || replay.replay_battle_type_info?.player1;
         const player2 = replay.player2_info || replay.replay_battle_type_info?.player2;
 
-        // Determine which player is us based on the short_id
         const isPlayer1 = String(player1?.player?.short_id) === cfnId ||
           String(player1?.player?.fighter_id) === cfnId;
 
@@ -157,24 +191,27 @@ function App() {
           ? (isPlayer1 ? replay.player1_round_results > replay.player2_round_results : replay.player2_round_results > replay.player1_round_results)
           : (myInfo?.round_win ?? 0) > (opponentInfo?.round_win ?? 0);
 
-        if (didWin) wins++;
-        else losses++;
+        if (didWin) newWins++;
+        else newLosses++;
 
-        records.push({
+        newRecords.push({
           result: didWin ? "win" : "loss",
-          mrChange: 0, // Will be calculated if data available
+          mrChange: 0, // Will be updated by profile fetch if it triggers
           playerCharacter: myInfo?.character_name || `Char ${myInfo?.character_id || "?"}`,
           opponentCharacter: opponentInfo?.character_name || `Char ${opponentInfo?.character_id || "?"}`,
-          timestamp: replay.uploaded_at || replay.replay_id || "",
+          timestamp: id,
         });
       } catch (e) {
         console.warn("Failed to parse replay:", e, replay);
       }
     }
 
-    setStats(prev => ({ ...prev, wins, losses }));
-    setBattleHistory(records);
-    setStatus(`✅ Found ${records.length} battles (W:${wins} / L:${losses})`);
+    if (newRecords.length > 0) {
+      baselineReplayId.current = newRecords[0].timestamp; // new latest
+      setStats(prev => ({ ...prev, wins: prev.wins + newWins, losses: prev.losses + newLosses }));
+      setBattleHistory(prev => [...newRecords, ...prev]);
+      setStatus(`✅ Found ${newRecords.length} new battles!`);
+    }
   };
 
   // Poller - fetch both profile and battlelog
@@ -182,6 +219,7 @@ function App() {
     if (!isPolling || !cfnId) return;
 
     localStorage.setItem("sf6_cfn_id", cfnId);
+    getCurrentWindow().setSize(new LogicalSize(475, 175)).catch(console.error);
 
     const fetchData = () => {
       setStatus("📡 Fetching data...");
@@ -201,8 +239,8 @@ function App() {
     // Initial fetch
     fetchData();
 
-    // Poll every 2 minutes
-    const interval = setInterval(fetchData, 120000);
+    // Poll every 15 seconds
+    const interval = setInterval(fetchData, 15000);
     return () => clearInterval(interval);
   }, [isPolling, cfnId]);
 
@@ -222,11 +260,28 @@ function App() {
       <div className="drag-region" data-tauri-drag-region></div>
 
       <div className="container">
-        {/* Settings button */}
-        <div className="settings-container" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Settings">
-            ⚙️
-          </button>
+        <div className="top-bar">
+          <div className="top-bar-left">
+            {isPolling && (
+              <div className="stats-top-row">
+                <span className="stat-item">Total: {stats.wins + stats.losses}</span>
+                <span className="stat-separator">|</span>
+                <span className="stat-item">W: {stats.wins}</span>
+                <span className="stat-separator">|</span>
+                <span className="stat-item">L: {stats.losses}</span>
+                <span className="stat-separator">|</span>
+                <span className="stat-item">WR: {winRate}%</span>
+              </div>
+            )}
+          </div>
+          <div className="top-bar-right">
+            <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Settings">
+              ⚙️
+            </button>
+            <button className="btn-icon" onClick={() => getCurrentWindow().close()} title="Exit">
+              ✕
+            </button>
+          </div>
           {showSettings && (
             <div className="settings-menu">
               <button
@@ -234,27 +289,55 @@ function App() {
                 onClick={() => {
                   const newType = scoreType === "MR" ? "LP" : "MR";
                   setScoreType(newType);
-                  initialMR.current = null; // Reset session tracking
+                  initialMR.current = null;
+                  lastMR.current = null;
                   setShowSettings(false);
                 }}
               >
                 Switch to {scoreType === "MR" ? "LP" : "MR"} Mode
               </button>
 
-              <button
-                className="btn-mock menu-btn"
-                onClick={() => setAlwaysOnTop(!alwaysOnTop)}
-              >
-                {alwaysOnTop ? "☑️ Always On Top" : "☐ Always On Top"}
-              </button>
-
               {isPolling && (
-                <button className="btn-danger menu-btn" style={{ marginTop: "5px" }} onClick={() => {
-                  setIsPolling(false);
-                  setShowSettings(false);
-                  initialMR.current = null;
-                  setStatus("Stopped tracking.");
-                }}>Stop Tracking</button>
+                <>
+                  <button className="btn-primary menu-btn" style={{ marginTop: "5px" }} onClick={() => {
+                    setStats({ currentMR: 0, sessionChange: 0, lastDelta: 0, wins: 0, losses: 0 });
+                    setBattleHistory([]);
+                    initialMR.current = null;
+                    lastMR.current = null;
+                    baselineReplayId.current = null;
+                    setShowSettings(false);
+                    setStatus("🔄 Session reset. Waiting for new matches...");
+                  }}>Reset Session</button>
+                  <button className="btn-danger menu-btn" style={{ marginTop: "5px" }} onClick={() => {
+                    setIsPolling(false);
+                    setShowSettings(false);
+                    initialMR.current = null;
+                    lastMR.current = null;
+                    baselineReplayId.current = null;
+                    setStatus("Stopped tracking.");
+                  }}>Stop Tracking</button>
+                  {import.meta.env.DEV && (
+                    <>
+                      <button className="btn-mock menu-btn" style={{ marginTop: "5px" }} onClick={() => {
+                        const defaultScore = scoreType === "MR" ? 1500 : 25000;
+                        setStats(prev => ({ ...prev, currentMR: defaultScore, sessionChange: 0 }));
+                        initialMR.current = defaultScore;
+                        lastMR.current = defaultScore;
+                        setShowSettings(false);
+                      }}>Set Default Score ({scoreType === "MR" ? "1500" : "25000"})</button>
+                      <button className="btn-success menu-btn" style={{ marginTop: "5px" }} onClick={() => {
+                        const delta = Math.floor(Math.random() * 30) + 20;
+                        setStats(prev => ({ ...prev, wins: prev.wins + 1, currentMR: prev.currentMR + delta, lastDelta: delta, sessionChange: prev.sessionChange + delta }));
+                        setShowSettings(false);
+                      }}>Mock Win</button>
+                      <button className="btn-danger menu-btn" style={{ marginTop: "5px" }} onClick={() => {
+                        const delta = -(Math.floor(Math.random() * 30) + 20);
+                        setStats(prev => ({ ...prev, losses: prev.losses + 1, currentMR: prev.currentMR + delta, lastDelta: delta, sessionChange: prev.sessionChange + delta }));
+                        setShowSettings(false);
+                      }}>Mock Loss</button>
+                    </>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -286,20 +369,10 @@ function App() {
           </div>
         ) : (
           <div className="dashboard">
-            <div className="stats-top-row">
-              <span className="stat-item">Total: {stats.wins + stats.losses}</span>
-              <span className="stat-separator">|</span>
-              <span className="stat-item">W: {stats.wins}</span>
-              <span className="stat-separator">|</span>
-              <span className="stat-item">L: {stats.losses}</span>
-              <span className="stat-separator">|</span>
-              <span className="stat-item">WR: {winRate}%</span>
-            </div>
-
             <div className="score-main">
               <div className="mr-value">
                 <AnimatedNumber value={stats.currentMR} />
-                <span style={{ fontSize: "1rem", color: "var(--text-muted)", marginLeft: "8px" }}>{scoreType}</span>
+                <span style={{ fontSize: "min(16vh, 5vw)", color: "var(--text-muted)", marginLeft: "0.5vw" }}>{scoreType}</span>
               </div>
               <div className={`mr-change ${stats.sessionChange >= 0 ? 'positive' : 'negative'}`}>
                 {stats.sessionChange >= 0 ? "+" : ""}
@@ -307,32 +380,6 @@ function App() {
               </div>
             </div>
 
-            {battleHistory.length > 0 && (
-              <div className="battle-history" style={{ width: '100%', marginTop: '10px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto', paddingRight: '4px' }}>
-                  {battleHistory.slice(0, 50).map((record, idx) => (
-                    <div key={idx} style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      padding: '6px 12px',
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      borderRadius: '8px',
-                      borderLeft: `4px solid ${record.result === 'win' ? 'var(--success)' : 'var(--danger)'}`,
-                      fontSize: '0.9rem'
-                    }}>
-                      <span style={{ color: record.result === 'win' ? 'var(--success)' : 'var(--danger)', fontWeight: 'bold', width: '20px' }}>
-                        {record.result === 'win' ? 'W' : 'L'}
-                      </span>
-                      <span style={{ color: 'var(--text-main)', flex: 1, textAlign: 'center' }}>
-                        {record.playerCharacter} vs {record.opponentCharacter}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <p className="status-text" style={{ marginTop: '10px' }}>{status}</p>
           </div>
         )}
       </div>

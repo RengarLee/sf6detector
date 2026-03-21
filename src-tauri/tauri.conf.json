@@ -13,13 +13,13 @@
     "windows": [
       {
         "title": "SF6Detector",
-        "width": 800,
-        "height": 600,
+        "width": 475,
+        "height": 175,
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
         "alwaysOnTop": false,
-        "transparent": true
+        "transparent": false
       }
     ],
     "security": {

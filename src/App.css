@@ -19,9 +19,6 @@ body {
   padding: 0;
   font-family: 'Outfit', sans-serif;
   background-color: var(--bg-color);
-  background-image:
-    radial-gradient(circle at 10% 20%, rgba(92, 98, 214, 0.15) 0%, transparent 40%),
-    radial-gradient(circle at 90% 80%, rgba(0, 210, 135, 0.1) 0%, transparent 40%);
   color: var(--text-main);
   height: 100vh;
   overflow: hidden;
@@ -31,12 +28,19 @@ body {
 .container {
   display: flex;
   justify-content: center;
-  align-items: center;
+  align-items: flex-end;
   height: 100vh;
-  padding: 20px;
+  padding: 0 20px 5px;
   box-sizing: border-box;
   position: relative;
   z-index: 10;
+  pointer-events: none;
+}
+
+.container button,
+.container input,
+.container .settings-menu {
+  pointer-events: auto;
 }
 
 
@@ -169,38 +173,55 @@ button:disabled {
   width: 100%;
 }
 
-/* Settings Menu */
-.settings-container {
+/* Top Bar */
+.top-bar {
   position: absolute;
-  top: 15px;
-  right: 15px;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
   z-index: 100;
 }
 
+.top-bar-left {
+  display: flex;
+  align-items: center;
+}
+
+.top-bar-right {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
 .btn-icon {
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 50%;
-  width: 36px;
-  height: 36px;
-  font-size: 1.2rem;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  font-size: 0.85rem;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
-  color: white;
+  transition: background 0.15s;
+  color: rgba(255, 255, 255, 0.35);
   padding: 0;
 }
 
 .btn-icon:hover {
-  background: rgba(255, 255, 255, 0.1);
-  transform: rotate(90deg);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.7);
+  transform: none;
 }
 
 .settings-menu {
   position: absolute;
-  top: 45px;
+  top: 36px;
   right: 0;
   background: rgba(20, 20, 30, 0.95);
   backdrop-filter: blur(10px);
@@ -211,8 +232,27 @@ button:disabled {
   flex-direction: column;
   gap: 8px;
   min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
   animation: fadeIn 0.2s ease forwards;
+}
+
+.settings-menu::-webkit-scrollbar {
+  width: 4px;
+}
+
+.settings-menu::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-menu::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+.settings-menu::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .menu-btn {
@@ -228,21 +268,15 @@ button:disabled {
   left: 0;
   width: 100vw;
   height: 100vh;
-  z-index: 1;
+  z-index: 9;
 }
 
 
 
 .stats-top-row {
   display: flex;
-  flex-direction: row;
-  justify-content: center;
   align-items: center;
-  gap: 0.5rem;
-  background: rgba(0, 0, 0, 0.4);
-  padding: 6px 12px;
-  border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 0.4rem;
 }
 
 .stat-item {
@@ -262,41 +296,28 @@ button:disabled {
   flex-direction: row;
   align-items: baseline;
   justify-content: center;
-  gap: 1.2rem;
-  padding: 1rem 0;
+  gap: 2vw;
 }
 
 .mr-value {
-  font-size: 4.5rem;
-  font-weight: 800;
+  font-size: min(70vh, 25vw);
+  font-weight: 700;
   line-height: 1;
-  text-shadow: 0 0 30px rgba(92, 98, 214, 0.4);
-  background: linear-gradient(180deg, #ffffff, #c5cbf0);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: #ffffff;
 }
 
 .mr-change {
-  font-size: 1.8rem;
-  font-weight: 700;
-  padding: 6px 14px;
-  border-radius: 12px;
-  transition: all 0.3s ease;
-  line-height: 1.2;
+  font-size: min(24vh, 8vw);
+  font-weight: 600;
+  line-height: 1;
 }
 
 .mr-change.positive {
   color: var(--success);
-  background: rgba(0, 210, 135, 0.15);
-  box-shadow: 0 0 10px var(--success-glow);
-  animation: popPositive 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 .mr-change.negative {
   color: var(--danger);
-  background: rgba(255, 42, 95, 0.15);
-  box-shadow: 0 0 10px var(--danger-glow);
-  animation: popNegative 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
 @keyframes popPositive {
