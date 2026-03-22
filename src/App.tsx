@@ -189,6 +189,10 @@ function App() {
                 setScoreType(scoreType === "MR" ? "LP" : "MR");
                 setShowSettings(false);
               }}>Switch to {scoreType === "MR" ? "LP" : "MR"}</button>
+              <button className="btn-primary menu-btn" onClick={() => {
+                invoke("open_community_window");
+                setShowSettings(false);
+              }}>Community / 社区</button>
               {isPolling && (
                 <>
                   <button className="btn-primary menu-btn" onClick={() => {
@@ -258,6 +262,7 @@ function App() {
           </div>
         )}
       </div>
+
     </>
   );
 }

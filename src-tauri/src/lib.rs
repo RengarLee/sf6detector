@@ -103,6 +103,27 @@ async fn open_login_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn open_community_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("community") {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        &app,
+        "community",
+        WebviewUrl::App("community.html".into()),
+    )
+    .title("Community / 社区")
+    .inner_size(450.0, 480.0)
+    .resizable(false)
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn fetch_buckler_data(app: AppHandle, endpoint: String) -> Result<(), String> {
     let id = FETCHER_ID.fetch_add(1, Ordering::SeqCst);
     let label = format!("data_fetcher_{}", id);
@@ -181,7 +202,7 @@ async fn fetch_buckler_data(app: AppHandle, endpoint: String) -> Result<(), Stri
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![open_login_window, fetch_buckler_data, parse_battle_html])
+        .invoke_handler(tauri::generate_handler![open_login_window, open_community_window, fetch_buckler_data, parse_battle_html])
         .register_uri_scheme_protocol("sf6data", move |ctx, request| {
             if let Some(query) = request.uri().query() {
                 // Handling User Code auto detection: sf6data://usercode?code=xxx
