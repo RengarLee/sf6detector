@@ -8,9 +8,9 @@ fn sample_html() -> &'static str {
                 <li data-index="0">
                     <div class="battle_data_inner_log__p5QL6">
                         <div class="battle_data_name_space__iCss5">
-                            <p class="battle_data_name_p1__Ookss"><span class="battle_data_platform__8y0GW"></span><span class="battle_data_name__IPyjF">Koroちん</span></p>
+                            <p class="battle_data_name_p1__Ookss"><span class="battle_data_platform__8y0GW"></span><span class="battle_data_name__IPyjF">PlayerA</span></p>
                             <p class="battle_data_date__f1sP6">03/19/2026 21:33</p>
-                            <p class="battle_data_name_p2__ua7Oo"><span class="battle_data_platform__8y0GW"></span><span class="battle_data_name__IPyjF">cai10</span></p>
+                            <p class="battle_data_name_p2__ua7Oo"><span class="battle_data_platform__8y0GW"></span><span class="battle_data_name__IPyjF">PlayerB</span></p>
                         </div>
                         <div class="battle_data_player1__MIpvf battle_data_win__8Y4Me">
                             <ul>
@@ -31,7 +31,7 @@ fn sample_html() -> &'static str {
                 <li data-index="1">
                     <div class="battle_data_inner_log__p5QL6">
                         <div class="battle_data_name_space__iCss5">
-                            <p class="battle_data_name_p1__Ookss"><span class="battle_data_platform__8y0GW"></span><span class="battle_data_name__IPyjF">cai10</span></p>
+                            <p class="battle_data_name_p1__Ookss"><span class="battle_data_platform__8y0GW"></span><span class="battle_data_name__IPyjF">PlayerB</span></p>
                             <p class="battle_data_date__f1sP6">03/19/2026 21:31</p>
                             <p class="battle_data_name_p2__ua7Oo"><span class="battle_data_platform__8y0GW"></span><span class="battle_data_name__IPyjF">TestPlayer</span></p>
                         </div>
@@ -69,8 +69,8 @@ fn test_parse_first_entry() {
     let e = &entries[0];
 
     assert_eq!(e.date, "03/19/2026 21:33");
-    assert_eq!(e.player1_name, "Koroちん");
-    assert_eq!(e.player2_name, "cai10");
+    assert_eq!(e.player1_name, "PlayerA");
+    assert_eq!(e.player2_name, "PlayerB");
     assert_eq!(e.player1_result, "WIN");
     assert_eq!(e.player2_result, "LOSE");
     assert_eq!(e.player1_rank, "Master");
@@ -89,7 +89,7 @@ fn test_parse_second_entry_reversed_result() {
     let e = &entries[1];
 
     assert_eq!(e.date, "03/19/2026 21:31");
-    assert_eq!(e.player1_name, "cai10");
+    assert_eq!(e.player1_name, "PlayerB");
     assert_eq!(e.player2_name, "TestPlayer");
     assert_eq!(e.player1_result, "LOSE");
     assert_eq!(e.player2_result, "WIN");
@@ -115,12 +115,12 @@ fn test_parse_username() {
         <section class="status_personal__JO1zh">
             <ul class="status_personal__info__zU_gn">
                 <li class="status_bbc_title__QLzS6">Brand NewMaster</li>
-                <li class="status_name__gXNo9"><span class="status_platform__Pp1nu"><span></span></span><span class="status_name__gXNo9">cai10</span></li>
-                <li class="status_sid__P91rn">User Code:2123870218</li>
+                <li class="status_name__gXNo9"><span class="status_platform__Pp1nu"><span></span></span><span class="status_name__gXNo9">PlayerB</span></li>
+                <li class="status_sid__P91rn">User Code:0000000000</li>
             </ul>
         </section>
     "#;
-    assert_eq!(parse_username(html), Some("cai10".to_string()));
+    assert_eq!(parse_username(html), Some("PlayerB".to_string()));
 }
 
 #[test]
