@@ -202,6 +202,8 @@ async fn fetch_buckler_data(app: AppHandle, endpoint: String) -> Result<(), Stri
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![open_login_window, open_community_window, fetch_buckler_data, parse_battle_html])
         .register_uri_scheme_protocol("sf6data", move |ctx, request| {
             if let Some(query) = request.uri().query() {

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import "./App.css";
 import {
   type RustBattleEntry,
@@ -61,6 +63,7 @@ function App() {
   const [scoreType, setScoreType] = useState<"LP" | "MR">("LP");
   const [alwaysOnTop] = useState(() => localStorage.getItem(STORAGE_KEY_ALWAYS_ON_TOP) === "true");
   const [loginStatus, setLoginStatus] = useState<"idle" | "logging_in" | "logged_in">("idle");
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "downloading" | "up-to-date" | "error">("idle");
 
   // Score display state — both LP and MR tracked simultaneously
   const [currentLP, setCurrentLP] = useState(0);
@@ -224,6 +227,25 @@ function App() {
     setShowSettings(false);
   };
 
+  const handleCheckUpdate = async () => {
+    try {
+      setUpdateStatus("checking");
+      const update = await check();
+      if (update) {
+        setUpdateStatus("downloading");
+        await update.downloadAndInstall();
+        await relaunch();
+      } else {
+        setUpdateStatus("up-to-date");
+        setTimeout(() => setUpdateStatus("idle"), 3000);
+      }
+    } catch (err) {
+      console.error("Update check failed:", err);
+      setUpdateStatus("error");
+      setTimeout(() => setUpdateStatus("idle"), 3000);
+    }
+  };
+
   const winRate = calcWinRate(wins, losses);
   const mainScore = scoreType === "LP" ? currentLP : currentMR;
   const scoreChange = scoreType === "LP" ? currentLP - initialLP : currentMR - initialMR;
@@ -266,6 +288,17 @@ function App() {
                 invoke("open_community_window");
                 setShowSettings(false);
               }}>Community / 社区</button>
+              <button
+                className="btn-primary menu-btn"
+                onClick={handleCheckUpdate}
+                disabled={updateStatus === "checking" || updateStatus === "downloading"}
+              >
+                {updateStatus === "checking" ? "Checking..." :
+                 updateStatus === "downloading" ? "Downloading..." :
+                 updateStatus === "up-to-date" ? "Up to date!" :
+                 updateStatus === "error" ? "Update failed" :
+                 "Check for Updates"}
+              </button>
               {isPolling && (
                 <>
                   <button className="btn-primary menu-btn" onClick={handleReset}>Reset Session</button>

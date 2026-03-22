@@ -14,7 +14,8 @@
       "Bash(npx tsc:*)",
       "Bash(npm install:*)",
       "Bash(npx vitest:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(npm test:*)"
     ]
   },
   "disabledMcpjsonServers": [
