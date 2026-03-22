@@ -1,25 +1,30 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import "./App.css";
+import {
+  type RustBattleEntry,
+  type CharacterLeagueData,
+  calcWinRate,
+  processNewEntries,
+  parseCharacterLeagueData,
+  detectCharacterChange,
+  pickDefaultCharacter,
+} from "./utils";
 
-type MatchData = {
-  currentMR: number;
-  sessionChange: number;
-  wins: number;
-  losses: number;
-};
+// ---- Constants ----
+const STORAGE_KEY_CFN_ID = "sf6_cfn_id";
+const STORAGE_KEY_ALWAYS_ON_TOP = "sf6_top";
+const POLL_INTERVAL_MS = 15_000;
+const ANIMATION_DURATION_MS = 500;
+const DASHBOARD_WINDOW_SIZE = { width: 475, height: 175 } as const;
+const SETUP_WINDOW_SIZE = { width: 400, height: 300 } as const;
+const BUCKLER_BASE_URL = "https://www.streetfighter.com/6/buckler/profile";
 
-type BattleRecord = {
-  result: "win" | "loss";
-  mrChange: number;
-  playerCharacter: string;
-  opponentCharacter: string;
-  timestamp: string;
-};
-
-// 动画滚动数字组件
+// ---- Components ----
 function AnimatedNumber({ value }: { value: number }) {
   const [displayValue, setDisplayValue] = useState(value);
 
@@ -28,7 +33,7 @@ function AnimatedNumber({ value }: { value: number }) {
     const end = value;
     if (start === end) return;
 
-    const duration = 500;
+    const duration = ANIMATION_DURATION_MS;
     const startTime = performance.now();
 
     const animate = (time: number) => {
@@ -49,21 +54,33 @@ function AnimatedNumber({ value }: { value: number }) {
 }
 
 function App() {
-  const [cfnId, setCfnId] = useState(() => localStorage.getItem("sf6_cfn_id") || "");
-  const [isPolling, setIsPolling] = useState(false);
+  const [cfnId, setCfnId] = useState(() => localStorage.getItem(STORAGE_KEY_CFN_ID) || "");
+  const [isPolling, setIsPolling] = useState(() => !!localStorage.getItem(STORAGE_KEY_CFN_ID));
   const [status, setStatus] = useState("Idle");
-  const [stats, setStats] = useState<MatchData>({ currentMR: 0, sessionChange: 0, wins: 0, losses: 0 });
+  const [wins, setWins] = useState(0);
+  const [losses, setLosses] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
-  const [scoreType, setScoreType] = useState<"MR" | "LP">("MR");
-  const [battleHistory, setBattleHistory] = useState<BattleRecord[]>([]);
-  const [alwaysOnTop, setAlwaysOnTop] = useState(() => localStorage.getItem("sf6_top") === "true");
+  const [scoreType, setScoreType] = useState<"LP" | "MR">("LP");
+  const [alwaysOnTop] = useState(() => localStorage.getItem(STORAGE_KEY_ALWAYS_ON_TOP) === "true");
   const [loginStatus, setLoginStatus] = useState<"idle" | "logging_in" | "logged_in">("idle");
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "downloading" | "up-to-date" | "error">("idle");
 
-  // Track initial MR for session change calculation
-  const initialMR = useRef<number | null>(null);
+  // Score display state — both LP and MR tracked simultaneously
+  const [currentLP, setCurrentLP] = useState(0);
+  const [initialLP, setInitialLP] = useState(0);
+  const [currentMR, setCurrentMR] = useState(0);
+  const [initialMR, setInitialMR] = useState(0);
+
+  // Play page tracking refs
+  const initialLeagueData = useRef<CharacterLeagueData[] | null>(null);
+  const previousLeagueData = useRef<CharacterLeagueData[] | null>(null);
+
+  // Battlelog tracking refs
+  const username = useRef<string | null>(null);
+  const baselineDate = useRef<string | null>(null);
 
   useEffect(() => {
-    localStorage.setItem("sf6_top", alwaysOnTop ? "true" : "false");
+    localStorage.setItem(STORAGE_KEY_ALWAYS_ON_TOP, alwaysOnTop ? "true" : "false");
     getCurrentWindow().setAlwaysOnTop(alwaysOnTop).catch(console.error);
   }, [alwaysOnTop]);
 
@@ -72,149 +89,166 @@ function App() {
     const unlisten = listen<string>("cfn_user_code_detected", (event) => {
       const detectedCode = event.payload;
       console.log("Auto-detected User Code:", detectedCode);
-      if (detectedCode && detectedCode !== cfnId) {
+      if (detectedCode) {
         setCfnId(detectedCode);
-        localStorage.setItem("sf6_cfn_id", detectedCode);
+        localStorage.setItem(STORAGE_KEY_CFN_ID, detectedCode);
         setLoginStatus("logged_in");
-        setStatus("✅ User Code detected: " + detectedCode);
-        setIsPolling(true); // Automatically start tracking!
+        setStatus("User Code detected: " + detectedCode);
+        setIsPolling(true);
       }
     });
     return () => { unlisten.then(f => f()); };
   }, [cfnId]);
 
-  // Listen for buckler data
+  // Listen for battlelog data — only update wins/losses
+  useEffect(() => {
+    const unlisten = listen<{ username: string | null; entries: RustBattleEntry[] }>("battlelog_update", (event) => {
+      const { username: parsedUsername, entries } = event.payload;
+      console.log("Battlelog update:", parsedUsername, entries.length, "entries");
+
+      if (parsedUsername && !username.current) {
+        username.current = parsedUsername;
+        console.log("Username set:", parsedUsername);
+      }
+
+      if (!username.current || entries.length === 0) return;
+
+      // First time: just set baseline date
+      if (baselineDate.current === null) {
+        baselineDate.current = entries[0].date;
+        console.log("Battlelog baseline set:", entries[0].date);
+        return;
+      }
+
+      const { newEntries, newWins, newLosses } = processNewEntries(entries, baselineDate.current, username.current);
+      if (newEntries.length === 0) return;
+
+      baselineDate.current = newEntries[0].date;
+      setWins(prev => prev + newWins);
+      setLosses(prev => prev + newLosses);
+
+      console.log(`Processed ${newEntries.length} new battles. +${newWins}W +${newLosses}L`);
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
+
+  // Listen for play page data — detect score changes
   useEffect(() => {
     const unlisten = listen<string>("buckler_data_received", (event) => {
       try {
-        const payload = JSON.parse(event.payload);
-        console.log("Received buckler data:", payload);
+        const data = JSON.parse(event.payload);
+        if (!data.html) return;
 
-        if (payload.error) {
-          console.warn("Data fetch error:", payload.error, payload.raw);
-          setStatus("⚠️ Failed to fetch data, retrying...");
+        const leagueData = parseCharacterLeagueData(data.html);
+        if (leagueData.length === 0) return;
+
+        // First time: set both initial and previous, display highest LP character
+        if (initialLeagueData.current === null) {
+          initialLeagueData.current = leagueData;
+          previousLeagueData.current = leagueData;
+
+          const best = pickDefaultCharacter(leagueData);
+          if (best) {
+            setCurrentLP(best.leaguePoint);
+            setInitialLP(best.leaguePoint);
+            setCurrentMR(best.masterRate);
+            setInitialMR(best.masterRate);
+          }
+
+          console.log("Play page baseline set:", leagueData.length, "characters", best ? `default: ${best.character}` : "");
           return;
         }
 
-        // Try to extract profile data (from profile endpoint)
-        if (payload.fighter_banner_info) {
-          const leagueInfo = payload.fighter_banner_info?.league_info;
-          if (leagueInfo) {
-            const mr = leagueInfo.master_rating ?? 0;
-            const lp = leagueInfo.league_point ?? 0;
-            const currentScore = scoreType === "MR" ? mr : lp;
+        // Compare with previous to detect which character changed
+        const change = detectCharacterChange(previousLeagueData.current!, leagueData);
+        previousLeagueData.current = leagueData;
 
-            if (initialMR.current === null) {
-              initialMR.current = currentScore;
-            }
+        if (!change) return;
 
-            setStats(prev => ({
-              ...prev,
-              currentMR: currentScore,
-              sessionChange: currentScore - (initialMR.current ?? currentScore),
-            }));
-            setStatus("✅ Profile data updated!");
-          }
-        }
+        // Find initial scores for this character
+        const initialEntry = initialLeagueData.current.find(c => c.character === change.character);
+        const initLP = initialEntry ? initialEntry.leaguePoint : change.currentLP;
+        const initMR = initialEntry ? initialEntry.masterRate : change.currentMR;
 
-        // Try to extract battlelog data (from battlelog page)
-        // The buckler battlelog page embeds data as a Next.js __NEXT_DATA__ script
-        // Or it might be returned as API JSON - handle both cases
-        if (payload.replay_list || payload.data?.replay_list) {
-          const replays = payload.replay_list || payload.data?.replay_list;
-          parseBattleLog(replays);
-        }
+        setCurrentLP(change.currentLP);
+        setInitialLP(initLP);
+        setCurrentMR(change.currentMR);
+        setInitialMR(initMR);
 
-      } catch (err) {
-        console.error("Failed to parse buckler data:", err);
-        setStatus("⚠️ Parse error, retrying...");
+        console.log(`Score change: ${change.character} LP:${change.currentLP}(init:${initLP}) MR:${change.currentMR}(init:${initMR})`);
+      } catch {
+        // Not play page data, ignore
       }
     });
     return () => { unlisten.then(f => f()); };
-  }, [scoreType]);
+  }, []);
 
-  const parseBattleLog = (replays: any[]) => {
-    if (!replays || !Array.isArray(replays)) return;
-
-    let wins = 0;
-    let losses = 0;
-    const records: BattleRecord[] = [];
-
-    for (const replay of replays) {
-      try {
-        // Typical Buckler battlelog replay structure
-        const player1 = replay.player1_info || replay.replay_battle_type_info?.player1;
-        const player2 = replay.player2_info || replay.replay_battle_type_info?.player2;
-
-        // Determine which player is us based on the short_id
-        const isPlayer1 = String(player1?.player?.short_id) === cfnId ||
-          String(player1?.player?.fighter_id) === cfnId;
-
-        const myInfo = isPlayer1 ? player1 : player2;
-        const opponentInfo = isPlayer1 ? player2 : player1;
-
-        const didWin = replay.player1_round_results && replay.player2_round_results
-          ? (isPlayer1 ? replay.player1_round_results > replay.player2_round_results : replay.player2_round_results > replay.player1_round_results)
-          : (myInfo?.round_win ?? 0) > (opponentInfo?.round_win ?? 0);
-
-        if (didWin) wins++;
-        else losses++;
-
-        records.push({
-          result: didWin ? "win" : "loss",
-          mrChange: 0, // Will be calculated if data available
-          playerCharacter: myInfo?.character_name || `Char ${myInfo?.character_id || "?"}`,
-          opponentCharacter: opponentInfo?.character_name || `Char ${opponentInfo?.character_id || "?"}`,
-          timestamp: replay.uploaded_at || replay.replay_id || "",
-        });
-      } catch (e) {
-        console.warn("Failed to parse replay:", e, replay);
-      }
-    }
-
-    setStats(prev => ({ ...prev, wins, losses }));
-    setBattleHistory(records);
-    setStatus(`✅ Found ${records.length} battles (W:${wins} / L:${losses})`);
-  };
-
-  // Poller - fetch both profile and battlelog
+  // Poller — fetch both battlelog and play page
   useEffect(() => {
     if (!isPolling || !cfnId) return;
 
-    localStorage.setItem("sf6_cfn_id", cfnId);
+    localStorage.setItem(STORAGE_KEY_CFN_ID, cfnId);
+    getCurrentWindow().setSize(new LogicalSize(DASHBOARD_WINDOW_SIZE.width, DASHBOARD_WINDOW_SIZE.height)).catch(console.error);
 
     const fetchData = () => {
-      setStatus("📡 Fetching data...");
-
-      // Fetch profile data for MR/LP
       invoke("fetch_buckler_data", {
-        endpoint: `https://www.streetfighter.com/6/buckler/api/v1/profile/${cfnId}`
-      }).catch(err => console.error("Profile fetch failed:", err));
-
-      // Fetch battlelog data for win/loss records
-      // Scraping the exact HTML page the user sees, extracting the __NEXT_DATA__ embedded script
-      invoke("fetch_buckler_data", {
-        endpoint: `https://www.streetfighter.com/6/buckler/profile/${cfnId}/battlelog`
+        endpoint: `${BUCKLER_BASE_URL}/${cfnId}/battlelog`
       }).catch(err => console.error("Battlelog fetch failed:", err));
+
+      invoke("fetch_buckler_data", {
+        endpoint: `${BUCKLER_BASE_URL}/${cfnId}/play`
+      }).catch(err => console.error("Play page fetch failed:", err));
     };
 
-    // Initial fetch
     fetchData();
-
-    // Poll every 2 minutes
-    const interval = setInterval(fetchData, 120000);
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchData, POLL_INTERVAL_MS);
+    return () => {
+      clearInterval(interval);
+      getCurrentWindow().setSize(new LogicalSize(SETUP_WINDOW_SIZE.width, SETUP_WINDOW_SIZE.height)).catch(console.error);
+    };
   }, [isPolling, cfnId]);
 
   const handleLogin = () => {
     invoke("open_login_window");
     setLoginStatus("logging_in");
-    setStatus("🔐 Please login in the popup window...");
+    setStatus("Please login in the popup window...");
   };
 
-  const winRate = stats.wins + stats.losses > 0
-    ? Math.round((stats.wins / (stats.wins + stats.losses)) * 100)
-    : 0;
+  const handleReset = () => {
+    setWins(0);
+    setLosses(0);
+    setCurrentLP(0);
+    setInitialLP(0);
+    setCurrentMR(0);
+    setInitialMR(0);
+    baselineDate.current = null;
+    initialLeagueData.current = null;
+    previousLeagueData.current = null;
+    setShowSettings(false);
+  };
+
+  const handleCheckUpdate = async () => {
+    try {
+      setUpdateStatus("checking");
+      const update = await check();
+      if (update) {
+        setUpdateStatus("downloading");
+        await update.downloadAndInstall();
+        await relaunch();
+      } else {
+        setUpdateStatus("up-to-date");
+        setTimeout(() => setUpdateStatus("idle"), 3000);
+      }
+    } catch (err) {
+      console.error("Update check failed:", err);
+      setUpdateStatus("error");
+      setTimeout(() => setUpdateStatus("idle"), 3000);
+    }
+  };
+
+  const winRate = calcWinRate(wins, losses);
+  const mainScore = scoreType === "LP" ? currentLP : currentMR;
+  const scoreChange = scoreType === "LP" ? currentLP - initialLP : currentMR - initialMR;
 
   return (
     <>
@@ -222,39 +256,80 @@ function App() {
       <div className="drag-region" data-tauri-drag-region></div>
 
       <div className="container">
-        {/* Settings button */}
-        <div className="settings-container" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-          <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Settings">
-            ⚙️
-          </button>
+        <div className="top-bar">
+          <div className="top-bar-left">
+            {isPolling && (
+              <div className="stats-top-row">
+                <span className="stat-item">Total: {wins + losses}</span>
+                <span className="stat-separator">|</span>
+                <span className="stat-item">W: {wins}</span>
+                <span className="stat-separator">|</span>
+                <span className="stat-item">L: {losses}</span>
+                <span className="stat-separator">|</span>
+                <span className="stat-item">WR: {winRate}%</span>
+              </div>
+            )}
+          </div>
+          <div className="top-bar-right">
+            <button className="btn-icon" onClick={() => setShowSettings(!showSettings)} title="Settings">
+              ⚙️
+            </button>
+            <button className="btn-icon" onClick={() => getCurrentWindow().close()} title="Exit">
+              ✕
+            </button>
+          </div>
           {showSettings && (
             <div className="settings-menu">
+              <button className="btn-primary menu-btn" onClick={() => {
+                setScoreType(scoreType === "LP" ? "MR" : "LP");
+                setShowSettings(false);
+              }}>Switch to {scoreType === "LP" ? "MR" : "LP"}</button>
+              <button className="btn-primary menu-btn" onClick={() => {
+                invoke("open_community_window");
+                setShowSettings(false);
+              }}>Community / 社区</button>
               <button
                 className="btn-primary menu-btn"
-                onClick={() => {
-                  const newType = scoreType === "MR" ? "LP" : "MR";
-                  setScoreType(newType);
-                  initialMR.current = null; // Reset session tracking
-                  setShowSettings(false);
-                }}
+                onClick={handleCheckUpdate}
+                disabled={updateStatus === "checking" || updateStatus === "downloading"}
               >
-                Switch to {scoreType === "MR" ? "LP" : "MR"} Mode
+                {updateStatus === "checking" ? "Checking..." :
+                 updateStatus === "downloading" ? "Downloading..." :
+                 updateStatus === "up-to-date" ? "Up to date!" :
+                 updateStatus === "error" ? "Update failed" :
+                 "Check for Updates"}
               </button>
-
-              <button
-                className="btn-mock menu-btn"
-                onClick={() => setAlwaysOnTop(!alwaysOnTop)}
-              >
-                {alwaysOnTop ? "☑️ Always On Top" : "☐ Always On Top"}
-              </button>
-
               {isPolling && (
-                <button className="btn-danger menu-btn" style={{ marginTop: "5px" }} onClick={() => {
-                  setIsPolling(false);
-                  setShowSettings(false);
-                  initialMR.current = null;
-                  setStatus("Stopped tracking.");
-                }}>Stop Tracking</button>
+                <>
+                  <button className="btn-primary menu-btn" onClick={handleReset}>Reset Session</button>
+                  <button className="btn-danger menu-btn" style={{ marginTop: "5px" }} onClick={() => {
+                    setIsPolling(false);
+                    handleReset();
+                  }}>Stop Tracking</button>
+                  {import.meta.env.DEV && (
+                    <>
+                      <button className="btn-mock menu-btn" style={{ marginTop: "5px" }} onClick={() => {
+                        setCurrentLP(25000);
+                        setInitialLP(25000);
+                        setCurrentMR(1500);
+                        setInitialMR(1500);
+                        setShowSettings(false);
+                      }}>Set Default Scores</button>
+                      <button className="btn-success menu-btn" style={{ marginTop: "5px" }} onClick={() => {
+                        setWins(prev => prev + 1);
+                        setCurrentLP(prev => prev + (Math.floor(Math.random() * 100) + 50));
+                        setCurrentMR(prev => prev + (Math.floor(Math.random() * 30) + 20));
+                        setShowSettings(false);
+                      }}>Mock Win</button>
+                      <button className="btn-danger menu-btn" style={{ marginTop: "5px" }} onClick={() => {
+                        setLosses(prev => prev + 1);
+                        setCurrentLP(prev => prev - (Math.floor(Math.random() * 100) + 50));
+                        setCurrentMR(prev => prev - (Math.floor(Math.random() * 30) + 20));
+                        setShowSettings(false);
+                      }}>Mock Loss</button>
+                    </>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -264,78 +339,28 @@ function App() {
           <div className="setup-section">
             <h1 className="title">SF6Detector Setup</h1>
             <button className="btn-primary" onClick={handleLogin}>
-              {loginStatus === "logged_in" ? "✅ Logged In" : "1. Login to CFN"}
+              {loginStatus === "logged_in" ? "Logged In" : "Login to CFN"}
             </button>
-            <div className="input-group">
-              <input
-                type="text"
-                placeholder="Enter CFN User Code"
-                value={cfnId}
-                onChange={(e) => setCfnId(e.target.value)}
-                className="input-cfn"
-              />
-              <button
-                className="btn-success"
-                onClick={() => setIsPolling(true)}
-                disabled={!cfnId}
-              >
-                2. Start Tracking
-              </button>
-            </div>
+            {cfnId && (
+              <p className="status-text">User Code: {cfnId}</p>
+            )}
             <p className="status-text">{status}</p>
           </div>
         ) : (
           <div className="dashboard">
-            <div className="stats-top-row">
-              <span className="stat-item">Total: {stats.wins + stats.losses}</span>
-              <span className="stat-separator">|</span>
-              <span className="stat-item">W: {stats.wins}</span>
-              <span className="stat-separator">|</span>
-              <span className="stat-item">L: {stats.losses}</span>
-              <span className="stat-separator">|</span>
-              <span className="stat-item">WR: {winRate}%</span>
-            </div>
-
             <div className="score-main">
-              <div className="mr-value">
-                <AnimatedNumber value={stats.currentMR} />
-                <span style={{ fontSize: "1rem", color: "var(--text-muted)", marginLeft: "8px" }}>{scoreType}</span>
+              <div className="score-value">
+                <AnimatedNumber value={mainScore} />
+                <span className="score-type-label">{scoreType}</span>
               </div>
-              <div className={`mr-change ${stats.sessionChange >= 0 ? 'positive' : 'negative'}`}>
-                {stats.sessionChange >= 0 ? "+" : ""}
-                <AnimatedNumber value={stats.sessionChange} />
+              <div className={`score-change ${scoreChange >= 0 ? 'positive' : 'negative'}`}>
+                {scoreChange >= 0 ? "+" : ""}<AnimatedNumber value={scoreChange} />
               </div>
             </div>
-
-            {battleHistory.length > 0 && (
-              <div className="battle-history" style={{ width: '100%', marginTop: '10px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto', paddingRight: '4px' }}>
-                  {battleHistory.slice(0, 50).map((record, idx) => (
-                    <div key={idx} style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      padding: '6px 12px',
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      borderRadius: '8px',
-                      borderLeft: `4px solid ${record.result === 'win' ? 'var(--success)' : 'var(--danger)'}`,
-                      fontSize: '0.9rem'
-                    }}>
-                      <span style={{ color: record.result === 'win' ? 'var(--success)' : 'var(--danger)', fontWeight: 'bold', width: '20px' }}>
-                        {record.result === 'win' ? 'W' : 'L'}
-                      </span>
-                      <span style={{ color: 'var(--text-main)', flex: 1, textAlign: 'center' }}>
-                        {record.playerCharacter} vs {record.opponentCharacter}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <p className="status-text" style={{ marginTop: '10px' }}>{status}</p>
           </div>
         )}
       </div>
+
     </>
   );
 }

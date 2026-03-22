@@ -13,6 +13,11 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-always-on-top",
     "core:window:allow-close",
-    "core:event:default"
+    "core:window:allow-set-size",
+    "core:event:default",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "process:allow-restart"
   ]
 }

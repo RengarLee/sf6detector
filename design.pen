@@ -1,0 +1,177 @@
+{
+  "version": "2.8",
+  "children": [
+    {
+      "type": "frame",
+      "id": "sf6-detector-dashboard",
+      "name": "SF6Detector Dashboard",
+      "x": 0,
+      "y": 0,
+      "width": 320,
+      "height": 480,
+      "fill": "#0d0f1a",
+      "layout": "vertical",
+      "padding": [20, 20],
+      "children": [
+        {
+          "type": "frame",
+          "id": "header-row",
+          "name": "Header",
+          "width": "fill_container",
+          "height": 40,
+          "layout": "horizontal",
+          "children": [
+            {
+              "type": "text",
+              "id": "settings-icon",
+              "name": "Settings",
+              "text": "⚙️",
+              "fill": "#ffffff",
+              "fontSize": 18
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "stats-top-row",
+          "name": "Stats Top Row",
+          "width": "fill_container",
+          "height": 30,
+          "fill": "rgba(0, 0, 0, 0.4)",
+          "layout": "horizontal",
+          "padding": [6, 12],
+          "children": [
+            {
+              "type": "text",
+              "id": "stats-text",
+              "name": "Stats",
+              "text": "Total: 10  |  W: 6  |  L: 4  |  WR: 60%",
+              "fill": "#8b92b0",
+              "fontSize": 12
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "score-main",
+          "name": "Main Score",
+          "width": "fill_container",
+          "height": 100,
+          "layout": "horizontal",
+          "padding": [20, 0],
+          "children": [
+            {
+              "type": "text",
+              "id": "mr-value",
+              "name": "MR Value",
+              "text": "1500",
+              "fill": "#ffffff",
+              "fontSize": 64
+            },
+            {
+              "type": "text",
+              "id": "mr-label",
+              "name": "MR Label",
+              "text": "MR",
+              "fill": "#8b92b0",
+              "fontSize": 16
+            },
+            {
+              "type": "text",
+              "id": "mr-change",
+              "name": "MR Change",
+              "text": "+24",
+              "fill": "#00d287",
+              "fontSize": 24
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "battle-history-container",
+          "name": "Battle History List",
+          "width": "fill_container",
+          "height": 180,
+          "layout": "vertical",
+          "padding": [10, 0],
+          "children": [
+            {
+              "type": "frame",
+              "id": "history-item-1",
+              "name": "Win Match",
+              "width": "fill_container",
+              "height": 30,
+              "fill": "rgba(255, 255, 255, 0.05)",
+              "layout": "horizontal",
+              "padding": [6, 12],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hi-1-result",
+                  "name": "Result W",
+                  "text": "W",
+                  "fill": "#00d287",
+                  "fontSize": 14
+                },
+                {
+                  "type": "text",
+                  "id": "hi-1-match",
+                  "name": "Match Info",
+                  "text": "Ryu vs Ken",
+                  "fill": "#ffffff",
+                  "fontSize": 14
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "history-item-2",
+              "name": "Loss Match",
+              "width": "fill_container",
+              "height": 30,
+              "fill": "rgba(255, 255, 255, 0.05)",
+              "layout": "horizontal",
+              "padding": [6, 12],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hi-2-result",
+                  "name": "Result L",
+                  "text": "L",
+                  "fill": "#ff2a5f",
+                  "fontSize": 14
+                },
+                {
+                  "type": "text",
+                  "id": "hi-2-match",
+                  "name": "Match Info",
+                  "text": "Ryu vs Luke",
+                  "fill": "#ffffff",
+                  "fontSize": 14
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "status-container",
+          "name": "Status Footer",
+          "width": "fill_container",
+          "height": 30,
+          "layout": "horizontal",
+          "children": [
+            {
+              "type": "text",
+              "id": "status-text",
+              "name": "Status Text",
+              "text": "✅ Polling...",
+              "fill": "#8b92b0",
+              "fontSize": 14
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
