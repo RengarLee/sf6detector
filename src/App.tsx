@@ -140,7 +140,11 @@ function App() {
 
     // Poll every 15 seconds
     const interval = setInterval(fetchData, 15000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      // When polling stops, resize back to setup size
+      getCurrentWindow().setSize(new LogicalSize(400, 300)).catch(console.error);
+    };
   }, [isPolling, cfnId]);
 
   const handleLogin = () => {
@@ -225,24 +229,11 @@ function App() {
           <div className="setup-section">
             <h1 className="title">SF6Detector Setup</h1>
             <button className="btn-primary" onClick={handleLogin}>
-              {loginStatus === "logged_in" ? "✅ Logged In" : "1. Login to CFN"}
+              {loginStatus === "logged_in" ? "✅ Logged In" : "Login to CFN"}
             </button>
-            <div className="input-group">
-              <input
-                type="text"
-                placeholder="Enter CFN User Code"
-                value={cfnId}
-                onChange={(e) => setCfnId(e.target.value)}
-                className="input-cfn"
-              />
-              <button
-                className="btn-success"
-                onClick={() => setIsPolling(true)}
-                disabled={!cfnId}
-              >
-                2. Start Tracking
-              </button>
-            </div>
+            {cfnId && (
+              <p className="status-text">User Code: {cfnId}</p>
+            )}
             <p className="status-text">{status}</p>
           </div>
         ) : (
