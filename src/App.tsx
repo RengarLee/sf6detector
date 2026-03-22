@@ -6,15 +6,23 @@ import "./App.css";
 import {
   type RustBattleEntry,
   type CharacterLeagueData,
-  findMyData,
   calcWinRate,
   processNewEntries,
   parseCharacterLeagueData,
   detectCharacterChange,
+  pickDefaultCharacter,
 } from "./utils";
 
+// ---- Constants ----
+const STORAGE_KEY_CFN_ID = "sf6_cfn_id";
+const STORAGE_KEY_ALWAYS_ON_TOP = "sf6_top";
+const POLL_INTERVAL_MS = 15_000;
+const ANIMATION_DURATION_MS = 500;
+const DASHBOARD_WINDOW_SIZE = { width: 475, height: 175 } as const;
+const SETUP_WINDOW_SIZE = { width: 400, height: 300 } as const;
+const BUCKLER_BASE_URL = "https://www.streetfighter.com/6/buckler/profile";
 
-// 动画滚动数字组件
+// ---- Components ----
 function AnimatedNumber({ value }: { value: number }) {
   const [displayValue, setDisplayValue] = useState(value);
 
@@ -23,7 +31,7 @@ function AnimatedNumber({ value }: { value: number }) {
     const end = value;
     if (start === end) return;
 
-    const duration = 500;
+    const duration = ANIMATION_DURATION_MS;
     const startTime = performance.now();
 
     const animate = (time: number) => {
@@ -44,18 +52,17 @@ function AnimatedNumber({ value }: { value: number }) {
 }
 
 function App() {
-  const [cfnId, setCfnId] = useState(() => localStorage.getItem("sf6_cfn_id") || "");
-  const [isPolling, setIsPolling] = useState(() => !!localStorage.getItem("sf6_cfn_id"));
+  const [cfnId, setCfnId] = useState(() => localStorage.getItem(STORAGE_KEY_CFN_ID) || "");
+  const [isPolling, setIsPolling] = useState(() => !!localStorage.getItem(STORAGE_KEY_CFN_ID));
   const [status, setStatus] = useState("Idle");
   const [wins, setWins] = useState(0);
   const [losses, setLosses] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [scoreType, setScoreType] = useState<"LP" | "MR">("LP");
-  const [alwaysOnTop] = useState(() => localStorage.getItem("sf6_top") === "true");
+  const [alwaysOnTop] = useState(() => localStorage.getItem(STORAGE_KEY_ALWAYS_ON_TOP) === "true");
   const [loginStatus, setLoginStatus] = useState<"idle" | "logging_in" | "logged_in">("idle");
 
   // Score display state — both LP and MR tracked simultaneously
-  const [activeCharacter, setActiveCharacter] = useState<string | null>(null);
   const [currentLP, setCurrentLP] = useState(0);
   const [initialLP, setInitialLP] = useState(0);
   const [currentMR, setCurrentMR] = useState(0);
@@ -70,7 +77,7 @@ function App() {
   const baselineDate = useRef<string | null>(null);
 
   useEffect(() => {
-    localStorage.setItem("sf6_top", alwaysOnTop ? "true" : "false");
+    localStorage.setItem(STORAGE_KEY_ALWAYS_ON_TOP, alwaysOnTop ? "true" : "false");
     getCurrentWindow().setAlwaysOnTop(alwaysOnTop).catch(console.error);
   }, [alwaysOnTop]);
 
@@ -81,7 +88,7 @@ function App() {
       console.log("Auto-detected User Code:", detectedCode);
       if (detectedCode) {
         setCfnId(detectedCode);
-        localStorage.setItem("sf6_cfn_id", detectedCode);
+        localStorage.setItem(STORAGE_KEY_CFN_ID, detectedCode);
         setLoginStatus("logged_in");
         setStatus("User Code detected: " + detectedCode);
         setIsPolling(true);
@@ -137,11 +144,8 @@ function App() {
           initialLeagueData.current = leagueData;
           previousLeagueData.current = leagueData;
 
-          const best = leagueData
-            .filter(c => c.leaguePoint > 0)
-            .sort((a, b) => b.leaguePoint - a.leaguePoint)[0];
+          const best = pickDefaultCharacter(leagueData);
           if (best) {
-            setActiveCharacter(best.character);
             setCurrentLP(best.leaguePoint);
             setInitialLP(best.leaguePoint);
             setCurrentMR(best.masterRate);
@@ -163,7 +167,6 @@ function App() {
         const initLP = initialEntry ? initialEntry.leaguePoint : change.currentLP;
         const initMR = initialEntry ? initialEntry.masterRate : change.currentMR;
 
-        setActiveCharacter(change.character);
         setCurrentLP(change.currentLP);
         setInitialLP(initLP);
         setCurrentMR(change.currentMR);
@@ -181,24 +184,24 @@ function App() {
   useEffect(() => {
     if (!isPolling || !cfnId) return;
 
-    localStorage.setItem("sf6_cfn_id", cfnId);
-    getCurrentWindow().setSize(new LogicalSize(475, 175)).catch(console.error);
+    localStorage.setItem(STORAGE_KEY_CFN_ID, cfnId);
+    getCurrentWindow().setSize(new LogicalSize(DASHBOARD_WINDOW_SIZE.width, DASHBOARD_WINDOW_SIZE.height)).catch(console.error);
 
     const fetchData = () => {
       invoke("fetch_buckler_data", {
-        endpoint: `https://www.streetfighter.com/6/buckler/profile/${cfnId}/battlelog`
+        endpoint: `${BUCKLER_BASE_URL}/${cfnId}/battlelog`
       }).catch(err => console.error("Battlelog fetch failed:", err));
 
       invoke("fetch_buckler_data", {
-        endpoint: `https://www.streetfighter.com/6/buckler/profile/${cfnId}/play`
+        endpoint: `${BUCKLER_BASE_URL}/${cfnId}/play`
       }).catch(err => console.error("Play page fetch failed:", err));
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 15000);
+    const interval = setInterval(fetchData, POLL_INTERVAL_MS);
     return () => {
       clearInterval(interval);
-      getCurrentWindow().setSize(new LogicalSize(400, 300)).catch(console.error);
+      getCurrentWindow().setSize(new LogicalSize(SETUP_WINDOW_SIZE.width, SETUP_WINDOW_SIZE.height)).catch(console.error);
     };
   }, [isPolling, cfnId]);
 
@@ -211,7 +214,6 @@ function App() {
   const handleReset = () => {
     setWins(0);
     setLosses(0);
-    setActiveCharacter(null);
     setCurrentLP(0);
     setInitialLP(0);
     setCurrentMR(0);
@@ -274,7 +276,6 @@ function App() {
                   {import.meta.env.DEV && (
                     <>
                       <button className="btn-mock menu-btn" style={{ marginTop: "5px" }} onClick={() => {
-                        setActiveCharacter("KEN");
                         setCurrentLP(25000);
                         setInitialLP(25000);
                         setCurrentMR(1500);
@@ -315,11 +316,11 @@ function App() {
         ) : (
           <div className="dashboard">
             <div className="score-main">
-              <div className="mr-value">
+              <div className="score-value">
                 <AnimatedNumber value={mainScore} />
-                <span style={{ fontSize: "min(16vh, 5vw)", color: "var(--text-muted)", marginLeft: "0.5vw" }}>{scoreType}</span>
+                <span className="score-type-label">{scoreType}</span>
               </div>
-              <div className={`mr-change ${scoreChange >= 0 ? 'positive' : 'negative'}`}>
+              <div className={`score-change ${scoreChange >= 0 ? 'positive' : 'negative'}`}>
                 {scoreChange >= 0 ? "+" : ""}<AnimatedNumber value={scoreChange} />
               </div>
             </div>

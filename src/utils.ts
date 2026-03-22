@@ -4,18 +4,6 @@ export type CharacterLeagueData = {
   masterRate: number;
 };
 
-export type ScoreData = {
-  current: number;
-  initial: number;
-};
-
-export type MatchData = {
-  mr: ScoreData;
-  lp: ScoreData;
-  wins: number;
-  losses: number;
-};
-
 export type RustBattleEntry = {
   date: string;
   player1_name: string;
@@ -76,42 +64,11 @@ export function processNewEntries(
   return { newEntries, newWins, newLosses };
 }
 
-export function updateStatsWithNewEntries(
-  prev: MatchData,
-  newWins: number,
-  newLosses: number,
-  currentScore: number,
-  scoreType: "MR" | "LP",
-): MatchData {
-  const updated: MatchData = {
-    ...prev,
-    wins: prev.wins + newWins,
-    losses: prev.losses + newLosses,
-  };
-
-  if (scoreType === "MR") {
-    updated.mr = { ...prev.mr, current: currentScore };
-    if (prev.mr.initial === 0) updated.mr.initial = currentScore;
-  } else {
-    updated.lp = { ...prev.lp, current: currentScore };
-    if (prev.lp.initial === 0) updated.lp.initial = currentScore;
-  }
-
-  return updated;
-}
-
-export function initializeBaseline(
-  prev: MatchData,
-  score: number,
-  scoreType: "MR" | "LP",
-): MatchData {
-  const updated = { ...prev };
-  if (scoreType === "MR") {
-    updated.mr = { current: score, initial: score };
-  } else {
-    updated.lp = { current: score, initial: score };
-  }
-  return updated;
+/** Pick the character with the highest LP (used for first-load default). */
+export function pickDefaultCharacter(data: CharacterLeagueData[]): CharacterLeagueData | null {
+  return data
+    .filter((c) => c.leaguePoint > 0)
+    .sort((a, b) => b.leaguePoint - a.leaguePoint)[0] ?? null;
 }
 
 export type CharacterScoreChange = {

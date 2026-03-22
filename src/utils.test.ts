@@ -3,43 +3,11 @@ import {
   findMyData,
   calcWinRate,
   processNewEntries,
-  updateStatsWithNewEntries,
-  initializeBaseline,
   parseCharacterLeagueData,
   detectCharacterChange,
-  type RustBattleEntry,
-  type MatchData,
-  type CharacterLeagueData,
+  pickDefaultCharacter,
 } from "./utils";
-
-// ============================================================
-// Helper factory
-// ============================================================
-
-function makeEntry(overrides: Partial<RustBattleEntry> = {}): RustBattleEntry {
-  return {
-    date: "03/19/2026 21:33",
-    player1_name: "Player1",
-    player1_result: "WIN",
-    player1_score_type: "LP",
-    player1_score: 15000,
-    player2_name: "Player2",
-    player2_result: "LOSE",
-    player2_score_type: "LP",
-    player2_score: 14000,
-    ...overrides,
-  };
-}
-
-function makeStats(overrides: Partial<MatchData> = {}): MatchData {
-  return {
-    mr: { current: 0, initial: 0 },
-    lp: { current: 0, initial: 0 },
-    wins: 0,
-    losses: 0,
-    ...overrides,
-  };
-}
+import { makeEntry, makeLeague, makeNextDataHtml } from "./test-helpers";
 
 // ============================================================
 // findMyData
@@ -289,154 +257,11 @@ describe("processNewEntries", () => {
 });
 
 // ============================================================
-// updateStatsWithNewEntries
-// ============================================================
-
-describe("updateStatsWithNewEntries", () => {
-  it("adds wins and losses to previous stats", () => {
-    const prev = makeStats({ wins: 5, losses: 3 });
-    const result = updateStatsWithNewEntries(prev, 2, 1, 16000, "LP");
-    expect(result.wins).toBe(7);
-    expect(result.losses).toBe(4);
-  });
-
-  it("updates LP current score", () => {
-    const prev = makeStats({ lp: { current: 15000, initial: 14000 } });
-    const result = updateStatsWithNewEntries(prev, 1, 0, 16000, "LP");
-    expect(result.lp.current).toBe(16000);
-    expect(result.lp.initial).toBe(14000); // unchanged
-  });
-
-  it("updates MR current score", () => {
-    const prev = makeStats({ mr: { current: 1500, initial: 1400 } });
-    const result = updateStatsWithNewEntries(prev, 1, 0, 1600, "MR");
-    expect(result.mr.current).toBe(1600);
-    expect(result.mr.initial).toBe(1400); // unchanged
-  });
-
-  it("sets LP initial when it was 0", () => {
-    const prev = makeStats({ lp: { current: 0, initial: 0 } });
-    const result = updateStatsWithNewEntries(prev, 1, 0, 12000, "LP");
-    expect(result.lp.current).toBe(12000);
-    expect(result.lp.initial).toBe(12000);
-  });
-
-  it("sets MR initial when it was 0", () => {
-    const prev = makeStats({ mr: { current: 0, initial: 0 } });
-    const result = updateStatsWithNewEntries(prev, 1, 0, 1500, "MR");
-    expect(result.mr.current).toBe(1500);
-    expect(result.mr.initial).toBe(1500);
-  });
-
-  it("does not change MR when updating LP", () => {
-    const prev = makeStats({ mr: { current: 1500, initial: 1400 } });
-    const result = updateStatsWithNewEntries(prev, 1, 0, 16000, "LP");
-    expect(result.mr.current).toBe(1500);
-    expect(result.mr.initial).toBe(1400);
-  });
-
-  it("does not change LP when updating MR", () => {
-    const prev = makeStats({ lp: { current: 15000, initial: 14000 } });
-    const result = updateStatsWithNewEntries(prev, 1, 0, 1600, "MR");
-    expect(result.lp.current).toBe(15000);
-    expect(result.lp.initial).toBe(14000);
-  });
-
-  it("handles zero new wins and losses", () => {
-    const prev = makeStats({ wins: 5, losses: 3 });
-    const result = updateStatsWithNewEntries(prev, 0, 0, 15000, "LP");
-    expect(result.wins).toBe(5);
-    expect(result.losses).toBe(3);
-  });
-
-  it("handles score decrease (loss)", () => {
-    const prev = makeStats({ lp: { current: 15000, initial: 15000 } });
-    const result = updateStatsWithNewEntries(prev, 0, 1, 14800, "LP");
-    expect(result.lp.current).toBe(14800);
-    expect(result.lp.initial).toBe(15000);
-  });
-
-  it("does not overwrite non-zero initial", () => {
-    const prev = makeStats({ lp: { current: 15000, initial: 14000 } });
-    const result = updateStatsWithNewEntries(prev, 1, 0, 16000, "LP");
-    expect(result.lp.initial).toBe(14000); // stays at 14000, not overwritten
-  });
-
-  it("preserves immutability (does not mutate prev)", () => {
-    const prev = makeStats({ wins: 5, lp: { current: 15000, initial: 14000 } });
-    const prevCopy = JSON.parse(JSON.stringify(prev));
-    updateStatsWithNewEntries(prev, 1, 0, 16000, "LP");
-    expect(prev).toEqual(prevCopy);
-  });
-});
-
-// ============================================================
-// initializeBaseline
-// ============================================================
-
-describe("initializeBaseline", () => {
-  it("sets MR current and initial to same value", () => {
-    const prev = makeStats();
-    const result = initializeBaseline(prev, 1500, "MR");
-    expect(result.mr.current).toBe(1500);
-    expect(result.mr.initial).toBe(1500);
-  });
-
-  it("sets LP current and initial to same value", () => {
-    const prev = makeStats();
-    const result = initializeBaseline(prev, 15000, "LP");
-    expect(result.lp.current).toBe(15000);
-    expect(result.lp.initial).toBe(15000);
-  });
-
-  it("does not affect LP when setting MR baseline", () => {
-    const prev = makeStats({ lp: { current: 12000, initial: 11000 } });
-    const result = initializeBaseline(prev, 1500, "MR");
-    expect(result.lp.current).toBe(12000);
-    expect(result.lp.initial).toBe(11000);
-  });
-
-  it("does not affect MR when setting LP baseline", () => {
-    const prev = makeStats({ mr: { current: 1500, initial: 1400 } });
-    const result = initializeBaseline(prev, 15000, "LP");
-    expect(result.mr.current).toBe(1500);
-    expect(result.mr.initial).toBe(1400);
-  });
-
-  it("overwrites existing values", () => {
-    const prev = makeStats({ mr: { current: 1500, initial: 1400 } });
-    const result = initializeBaseline(prev, 1800, "MR");
-    expect(result.mr.current).toBe(1800);
-    expect(result.mr.initial).toBe(1800);
-  });
-
-  it("handles zero score", () => {
-    const prev = makeStats();
-    const result = initializeBaseline(prev, 0, "LP");
-    expect(result.lp.current).toBe(0);
-    expect(result.lp.initial).toBe(0);
-  });
-
-  it("preserves wins and losses", () => {
-    const prev = makeStats({ wins: 10, losses: 5 });
-    const result = initializeBaseline(prev, 1500, "MR");
-    expect(result.wins).toBe(10);
-    expect(result.losses).toBe(5);
-  });
-
-  it("preserves immutability (does not mutate prev)", () => {
-    const prev = makeStats({ mr: { current: 1500, initial: 1400 } });
-    const prevCopy = JSON.parse(JSON.stringify(prev));
-    initializeBaseline(prev, 1800, "MR");
-    expect(prev).toEqual(prevCopy);
-  });
-});
-
-// ============================================================
 // parseCharacterLeagueData
 // ============================================================
 
-function makeNextDataHtml(characterLeagueInfos: unknown[]): string {
+/** Wrapper for tests that pass raw API-shaped objects directly. */
+function makeNextDataHtmlRaw(characterLeagueInfos: unknown[]): string {
   const nextData = {
     props: {
       pageProps: {
@@ -451,7 +276,7 @@ function makeNextDataHtml(characterLeagueInfos: unknown[]): string {
 
 describe("parseCharacterLeagueData", () => {
   it("extracts character name, league points, and master rating", () => {
-    const html = makeNextDataHtml([
+    const html = makeNextDataHtmlRaw([
       {
         character_alpha: "KEN",
         league_info: { league_point: 22620, master_rating: 0 },
@@ -469,7 +294,7 @@ describe("parseCharacterLeagueData", () => {
   });
 
   it("handles master rating values", () => {
-    const html = makeNextDataHtml([
+    const html = makeNextDataHtmlRaw([
       {
         character_alpha: "RYU",
         league_info: { league_point: 25000, master_rating: 1800 },
@@ -482,7 +307,7 @@ describe("parseCharacterLeagueData", () => {
   });
 
   it("treats league_point -1 as unplayed (returns -1)", () => {
-    const html = makeNextDataHtml([
+    const html = makeNextDataHtmlRaw([
       {
         character_alpha: "LUKE",
         league_info: { league_point: -1, master_rating: 0 },
@@ -514,7 +339,7 @@ describe("parseCharacterLeagueData", () => {
   });
 
   it("handles multiple characters with mixed data", () => {
-    const html = makeNextDataHtml([
+    const html = makeNextDataHtmlRaw([
       { character_alpha: "KEN", league_info: { league_point: 22620, master_rating: 0 } },
       { character_alpha: "RYU", league_info: { league_point: -1, master_rating: 0 } },
       { character_alpha: "JURI", league_info: { league_point: 30000, master_rating: 2100 } },
@@ -527,7 +352,7 @@ describe("parseCharacterLeagueData", () => {
   });
 
   it("handles empty character_league_infos array", () => {
-    const html = makeNextDataHtml([]);
+    const html = makeNextDataHtmlRaw([]);
     const result = parseCharacterLeagueData(html);
     expect(result).toEqual([]);
   });
@@ -536,10 +361,6 @@ describe("parseCharacterLeagueData", () => {
 // ============================================================
 // detectCharacterChange
 // ============================================================
-
-function makeLeague(character: string, lp: number, mr: number): CharacterLeagueData {
-  return { character, leaguePoint: lp, masterRate: mr };
-}
 
 describe("detectCharacterChange", () => {
   it("detects LP change for a character", () => {
@@ -603,5 +424,97 @@ describe("detectCharacterChange", () => {
     const prev = [makeLeague("KEN", 22620, 0)];
     const curr = [makeLeague("KEN", 22620, 0), makeLeague("RYU", 5000, 0)];
     expect(detectCharacterChange(prev, curr)).toBeNull();
+  });
+
+  it("detects first ranked game (LP from -1 to positive)", () => {
+    const prev = [makeLeague("RYU", -1, 0)];
+    const curr = [makeLeague("RYU", 5000, 0)];
+    const result = detectCharacterChange(prev, curr);
+    expect(result).toEqual({ character: "RYU", currentLP: 5000, currentMR: 0 });
+  });
+});
+
+// ============================================================
+// pickDefaultCharacter
+// ============================================================
+
+describe("pickDefaultCharacter", () => {
+  it("picks the character with the highest LP", () => {
+    const data = [makeLeague("KEN", 22620, 0), makeLeague("ZANGIEF", 17838, 0)];
+    expect(pickDefaultCharacter(data)!.character).toBe("KEN");
+  });
+
+  it("returns null when all characters are unplayed", () => {
+    const data = [makeLeague("RYU", -1, 0), makeLeague("KEN", -1, 0)];
+    expect(pickDefaultCharacter(data)).toBeNull();
+  });
+
+  it("returns null for empty array", () => {
+    expect(pickDefaultCharacter([])).toBeNull();
+  });
+
+  it("ignores characters with LP <= 0", () => {
+    const data = [makeLeague("RYU", -1, 0), makeLeague("KEN", 0, 0), makeLeague("JURI", 5000, 0)];
+    expect(pickDefaultCharacter(data)!.character).toBe("JURI");
+  });
+
+  it("picks highest LP even when another has higher MR", () => {
+    const data = [makeLeague("JURI", 25000, 1800), makeLeague("KEN", 30000, 0)];
+    expect(pickDefaultCharacter(data)!.character).toBe("KEN");
+  });
+});
+
+// ============================================================
+// Edge cases: processNewEntries with non-WIN results
+// ============================================================
+
+describe("processNewEntries edge cases", () => {
+  it("counts non-WIN result (e.g. DRAW) as a loss", () => {
+    const entries = [
+      makeEntry({ date: "d2", player1_result: "DRAW" }),
+      makeEntry({ date: "d1" }),
+    ];
+    const result = processNewEntries(entries, "d1", "Player1");
+    expect(result.newWins).toBe(0);
+    expect(result.newLosses).toBe(1);
+  });
+});
+
+// ============================================================
+// Edge cases: parseCharacterLeagueData with missing fields
+// ============================================================
+
+describe("parseCharacterLeagueData edge cases", () => {
+  it("throws/returns empty when league_info is missing", () => {
+    const html = makeNextDataHtmlRaw([
+      { character_alpha: "KEN" },
+    ]);
+    const result = parseCharacterLeagueData(html);
+    expect(result).toEqual([]);
+  });
+
+  it("throws/returns empty when league_point is missing", () => {
+    const html = makeNextDataHtmlRaw([
+      { character_alpha: "KEN", league_info: { master_rating: 0 } },
+    ]);
+    const result = parseCharacterLeagueData(html);
+    expect(result).toHaveLength(1);
+    expect(result[0].leaguePoint).toBeUndefined();
+  });
+});
+
+// ============================================================
+// Edge cases: calcWinRate with negative input
+// ============================================================
+
+describe("calcWinRate edge cases", () => {
+  it("returns 0 when negative input cancels total to zero", () => {
+    // -1 + 1 = 0 total → hits the zero guard
+    expect(calcWinRate(-1, 1)).toBe(0);
+  });
+
+  it("does not crash on negative inputs with nonzero total", () => {
+    // -1 + 3 = 2 total → Math.round(-1/2 * 100) = -50
+    expect(calcWinRate(-1, 3)).toBe(-50);
   });
 });
