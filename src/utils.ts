@@ -1,3 +1,9 @@
+export type CharacterLeagueData = {
+  character: string;
+  leaguePoint: number;
+  masterRate: number;
+};
+
 export type ScoreData = {
   current: number;
   initial: number;
@@ -106,4 +112,56 @@ export function initializeBaseline(
     updated.lp = { current: score, initial: score };
   }
   return updated;
+}
+
+export type CharacterScoreChange = {
+  character: string;
+  currentLP: number;
+  currentMR: number;
+};
+
+export function detectCharacterChange(
+  previous: CharacterLeagueData[],
+  current: CharacterLeagueData[],
+): CharacterScoreChange | null {
+  for (const curr of current) {
+    const prev = previous.find((p) => p.character === curr.character);
+    if (!prev) continue;
+
+    const lpChanged = curr.leaguePoint !== prev.leaguePoint && curr.leaguePoint > 0;
+    const mrChanged = curr.masterRate !== prev.masterRate && curr.masterRate > 0;
+
+    if (lpChanged || mrChanged) {
+      return {
+        character: curr.character,
+        currentLP: curr.leaguePoint,
+        currentMR: curr.masterRate,
+      };
+    }
+  }
+  return null;
+}
+
+export function parseCharacterLeagueData(html: string): CharacterLeagueData[] {
+  const match = html.match(
+    /<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/,
+  );
+  if (!match) return [];
+
+  try {
+    const data = JSON.parse(match[1]);
+    const infos =
+      data?.props?.pageProps?.play?.character_league_infos as
+        | unknown[]
+        | undefined;
+    if (!Array.isArray(infos)) return [];
+
+    return infos.map((item: any) => ({
+      character: item.character_alpha as string,
+      leaguePoint: item.league_info.league_point as number,
+      masterRate: item.league_info.master_rating as number,
+    }));
+  } catch {
+    return [];
+  }
 }

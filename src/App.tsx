@@ -4,13 +4,13 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import "./App.css";
 import {
-  type MatchData,
   type RustBattleEntry,
+  type CharacterLeagueData,
   findMyData,
   calcWinRate,
   processNewEntries,
-  updateStatsWithNewEntries,
-  initializeBaseline,
+  parseCharacterLeagueData,
+  detectCharacterChange,
 } from "./utils";
 
 
@@ -47,16 +47,25 @@ function App() {
   const [cfnId, setCfnId] = useState(() => localStorage.getItem("sf6_cfn_id") || "");
   const [isPolling, setIsPolling] = useState(() => !!localStorage.getItem("sf6_cfn_id"));
   const [status, setStatus] = useState("Idle");
-  const [stats, setStats] = useState<MatchData>({
-    mr: { current: 0, initial: 0 },
-    lp: { current: 0, initial: 0 },
-    wins: 0, losses: 0,
-  });
+  const [wins, setWins] = useState(0);
+  const [losses, setLosses] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
-  const [scoreType, setScoreType] = useState<"MR" | "LP">("MR");
+  const [scoreType, setScoreType] = useState<"LP" | "MR">("LP");
   const [alwaysOnTop] = useState(() => localStorage.getItem("sf6_top") === "true");
   const [loginStatus, setLoginStatus] = useState<"idle" | "logging_in" | "logged_in">("idle");
 
+  // Score display state — both LP and MR tracked simultaneously
+  const [activeCharacter, setActiveCharacter] = useState<string | null>(null);
+  const [currentLP, setCurrentLP] = useState(0);
+  const [initialLP, setInitialLP] = useState(0);
+  const [currentMR, setCurrentMR] = useState(0);
+  const [initialMR, setInitialMR] = useState(0);
+
+  // Play page tracking refs
+  const initialLeagueData = useRef<CharacterLeagueData[] | null>(null);
+  const previousLeagueData = useRef<CharacterLeagueData[] | null>(null);
+
+  // Battlelog tracking refs
   const username = useRef<string | null>(null);
   const baselineDate = useRef<string | null>(null);
 
@@ -74,20 +83,19 @@ function App() {
         setCfnId(detectedCode);
         localStorage.setItem("sf6_cfn_id", detectedCode);
         setLoginStatus("logged_in");
-        setStatus("✅ User Code detected: " + detectedCode);
-        setIsPolling(true); // Automatically start tracking!
+        setStatus("User Code detected: " + detectedCode);
+        setIsPolling(true);
       }
     });
     return () => { unlisten.then(f => f()); };
   }, [cfnId]);
 
-  // Listen for parsed battlelog data from Rust
+  // Listen for battlelog data — only update wins/losses
   useEffect(() => {
     const unlisten = listen<{ username: string | null; entries: RustBattleEntry[] }>("battlelog_update", (event) => {
       const { username: parsedUsername, entries } = event.payload;
       console.log("Battlelog update:", parsedUsername, entries.length, "entries");
 
-      // Save username on first detect
       if (parsedUsername && !username.current) {
         username.current = parsedUsername;
         console.log("Username set:", parsedUsername);
@@ -95,33 +103,81 @@ function App() {
 
       if (!username.current || entries.length === 0) return;
 
-      // First time: set baseline from latest entry
+      // First time: just set baseline date
       if (baselineDate.current === null) {
-        const latest = entries[0];
-        const { myScore, myScoreType } = findMyData(latest, username.current);
-        baselineDate.current = latest.date;
-        setStats(prev => initializeBaseline(prev, myScore, myScoreType));
-        console.log("Baseline set:", latest.date, myScoreType, myScore);
+        baselineDate.current = entries[0].date;
+        console.log("Battlelog baseline set:", entries[0].date);
         return;
       }
 
       const { newEntries, newWins, newLosses } = processNewEntries(entries, baselineDate.current, username.current);
       if (newEntries.length === 0) return;
 
-      // Latest entry has the current score
-      const { myScore: currentScore, myScoreType: latestType } = findMyData(newEntries[0], username.current);
-
-      // Update baseline to newest
       baselineDate.current = newEntries[0].date;
+      setWins(prev => prev + newWins);
+      setLosses(prev => prev + newLosses);
 
-      setStats(prev => updateStatsWithNewEntries(prev, newWins, newLosses, currentScore, latestType));
-
-      console.log(`Processed ${newEntries.length} new battles. ${latestType}: ${currentScore}`);
+      console.log(`Processed ${newEntries.length} new battles. +${newWins}W +${newLosses}L`);
     });
     return () => { unlisten.then(f => f()); };
   }, []);
 
-  // Poller - fetch both profile and battlelog
+  // Listen for play page data — detect score changes
+  useEffect(() => {
+    const unlisten = listen<string>("buckler_data_received", (event) => {
+      try {
+        const data = JSON.parse(event.payload);
+        if (!data.html) return;
+
+        const leagueData = parseCharacterLeagueData(data.html);
+        if (leagueData.length === 0) return;
+
+        // First time: set both initial and previous, display highest LP character
+        if (initialLeagueData.current === null) {
+          initialLeagueData.current = leagueData;
+          previousLeagueData.current = leagueData;
+
+          const best = leagueData
+            .filter(c => c.leaguePoint > 0)
+            .sort((a, b) => b.leaguePoint - a.leaguePoint)[0];
+          if (best) {
+            setActiveCharacter(best.character);
+            setCurrentLP(best.leaguePoint);
+            setInitialLP(best.leaguePoint);
+            setCurrentMR(best.masterRate);
+            setInitialMR(best.masterRate);
+          }
+
+          console.log("Play page baseline set:", leagueData.length, "characters", best ? `default: ${best.character}` : "");
+          return;
+        }
+
+        // Compare with previous to detect which character changed
+        const change = detectCharacterChange(previousLeagueData.current!, leagueData);
+        previousLeagueData.current = leagueData;
+
+        if (!change) return;
+
+        // Find initial scores for this character
+        const initialEntry = initialLeagueData.current.find(c => c.character === change.character);
+        const initLP = initialEntry ? initialEntry.leaguePoint : change.currentLP;
+        const initMR = initialEntry ? initialEntry.masterRate : change.currentMR;
+
+        setActiveCharacter(change.character);
+        setCurrentLP(change.currentLP);
+        setInitialLP(initLP);
+        setCurrentMR(change.currentMR);
+        setInitialMR(initMR);
+
+        console.log(`Score change: ${change.character} LP:${change.currentLP}(init:${initLP}) MR:${change.currentMR}(init:${initMR})`);
+      } catch {
+        // Not play page data, ignore
+      }
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
+
+  // Poller — fetch both battlelog and play page
   useEffect(() => {
     if (!isPolling || !cfnId) return;
 
@@ -129,20 +185,19 @@ function App() {
     getCurrentWindow().setSize(new LogicalSize(475, 175)).catch(console.error);
 
     const fetchData = () => {
-      // Fetch battlelog page — Rust parses HTML and emits battlelog_update event
       invoke("fetch_buckler_data", {
         endpoint: `https://www.streetfighter.com/6/buckler/profile/${cfnId}/battlelog`
       }).catch(err => console.error("Battlelog fetch failed:", err));
+
+      invoke("fetch_buckler_data", {
+        endpoint: `https://www.streetfighter.com/6/buckler/profile/${cfnId}/play`
+      }).catch(err => console.error("Play page fetch failed:", err));
     };
 
-    // Initial fetch
     fetchData();
-
-    // Poll every 15 seconds
     const interval = setInterval(fetchData, 15000);
     return () => {
       clearInterval(interval);
-      // When polling stops, resize back to setup size
       getCurrentWindow().setSize(new LogicalSize(400, 300)).catch(console.error);
     };
   }, [isPolling, cfnId]);
@@ -150,10 +205,26 @@ function App() {
   const handleLogin = () => {
     invoke("open_login_window");
     setLoginStatus("logging_in");
-    setStatus("🔐 Please login in the popup window...");
+    setStatus("Please login in the popup window...");
   };
 
-  const winRate = calcWinRate(stats.wins, stats.losses);
+  const handleReset = () => {
+    setWins(0);
+    setLosses(0);
+    setActiveCharacter(null);
+    setCurrentLP(0);
+    setInitialLP(0);
+    setCurrentMR(0);
+    setInitialMR(0);
+    baselineDate.current = null;
+    initialLeagueData.current = null;
+    previousLeagueData.current = null;
+    setShowSettings(false);
+  };
+
+  const winRate = calcWinRate(wins, losses);
+  const mainScore = scoreType === "LP" ? currentLP : currentMR;
+  const scoreChange = scoreType === "LP" ? currentLP - initialLP : currentMR - initialMR;
 
   return (
     <>
@@ -165,11 +236,11 @@ function App() {
           <div className="top-bar-left">
             {isPolling && (
               <div className="stats-top-row">
-                <span className="stat-item">Total: {stats.wins + stats.losses}</span>
+                <span className="stat-item">Total: {wins + losses}</span>
                 <span className="stat-separator">|</span>
-                <span className="stat-item">W: {stats.wins}</span>
+                <span className="stat-item">W: {wins}</span>
                 <span className="stat-separator">|</span>
-                <span className="stat-item">L: {stats.losses}</span>
+                <span className="stat-item">L: {losses}</span>
                 <span className="stat-separator">|</span>
                 <span className="stat-item">WR: {winRate}%</span>
               </div>
@@ -186,41 +257,42 @@ function App() {
           {showSettings && (
             <div className="settings-menu">
               <button className="btn-primary menu-btn" onClick={() => {
-                setScoreType(scoreType === "MR" ? "LP" : "MR");
+                setScoreType(scoreType === "LP" ? "MR" : "LP");
                 setShowSettings(false);
-              }}>Switch to {scoreType === "MR" ? "LP" : "MR"}</button>
+              }}>Switch to {scoreType === "LP" ? "MR" : "LP"}</button>
               <button className="btn-primary menu-btn" onClick={() => {
                 invoke("open_community_window");
                 setShowSettings(false);
               }}>Community / 社区</button>
               {isPolling && (
                 <>
-                  <button className="btn-primary menu-btn" onClick={() => {
-                    setStats({ mr: { current: 0, initial: 0 }, lp: { current: 0, initial: 0 }, wins: 0, losses: 0 });
-                    baselineDate.current = null;
-                    setShowSettings(false);
-                  }}>Reset Session</button>
+                  <button className="btn-primary menu-btn" onClick={handleReset}>Reset Session</button>
                   <button className="btn-danger menu-btn" style={{ marginTop: "5px" }} onClick={() => {
                     setIsPolling(false);
-                    baselineDate.current = null;
-                    setShowSettings(false);
+                    handleReset();
                   }}>Stop Tracking</button>
                   {import.meta.env.DEV && (
                     <>
                       <button className="btn-mock menu-btn" style={{ marginTop: "5px" }} onClick={() => {
-                        setStats(prev => ({ ...prev, mr: { current: 1500, initial: 1500 }, lp: { current: 25000, initial: 25000 } }));
+                        setActiveCharacter("KEN");
+                        setCurrentLP(25000);
+                        setInitialLP(25000);
+                        setCurrentMR(1500);
+                        setInitialMR(1500);
                         setShowSettings(false);
                       }}>Set Default Scores</button>
                       <button className="btn-success menu-btn" style={{ marginTop: "5px" }} onClick={() => {
-                        const delta = Math.floor(Math.random() * 30) + 20;
-                        setStats(prev => ({ ...prev, wins: prev.wins + 1, mr: { ...prev.mr, current: prev.mr.current + delta } }));
+                        setWins(prev => prev + 1);
+                        setCurrentLP(prev => prev + (Math.floor(Math.random() * 100) + 50));
+                        setCurrentMR(prev => prev + (Math.floor(Math.random() * 30) + 20));
                         setShowSettings(false);
-                      }}>Mock Win (MR)</button>
+                      }}>Mock Win</button>
                       <button className="btn-danger menu-btn" style={{ marginTop: "5px" }} onClick={() => {
-                        const delta = Math.floor(Math.random() * 30) + 20;
-                        setStats(prev => ({ ...prev, losses: prev.losses + 1, mr: { ...prev.mr, current: prev.mr.current - delta } }));
+                        setLosses(prev => prev + 1);
+                        setCurrentLP(prev => prev - (Math.floor(Math.random() * 100) + 50));
+                        setCurrentMR(prev => prev - (Math.floor(Math.random() * 30) + 20));
                         setShowSettings(false);
-                      }}>Mock Loss (MR)</button>
+                      }}>Mock Loss</button>
                     </>
                   )}
                 </>
@@ -233,7 +305,7 @@ function App() {
           <div className="setup-section">
             <h1 className="title">SF6Detector Setup</h1>
             <button className="btn-primary" onClick={handleLogin}>
-              {loginStatus === "logged_in" ? "✅ Logged In" : "Login to CFN"}
+              {loginStatus === "logged_in" ? "Logged In" : "Login to CFN"}
             </button>
             {cfnId && (
               <p className="status-text">User Code: {cfnId}</p>
@@ -242,23 +314,15 @@ function App() {
           </div>
         ) : (
           <div className="dashboard">
-            {(() => {
-              const s = scoreType === "MR" ? stats.mr : stats.lp;
-              const change = s.current - s.initial;
-              return (
-                <div className="score-main">
-                  <div className="mr-value">
-                    <AnimatedNumber value={s.current} />
-                    <span style={{ fontSize: "min(16vh, 5vw)", color: "var(--text-muted)", marginLeft: "0.5vw" }}>{scoreType}</span>
-                  </div>
-                  <div className={`mr-change ${change >= 0 ? 'positive' : 'negative'}`}>
-                    {change >= 0 ? "+" : ""}
-                    <AnimatedNumber value={change} />
-                  </div>
-                </div>
-              );
-            })()}
-
+            <div className="score-main">
+              <div className="mr-value">
+                <AnimatedNumber value={mainScore} />
+                <span style={{ fontSize: "min(16vh, 5vw)", color: "var(--text-muted)", marginLeft: "0.5vw" }}>{scoreType}</span>
+              </div>
+              <div className={`mr-change ${scoreChange >= 0 ? 'positive' : 'negative'}`}>
+                {scoreChange >= 0 ? "+" : ""}<AnimatedNumber value={scoreChange} />
+              </div>
+            </div>
           </div>
         )}
       </div>

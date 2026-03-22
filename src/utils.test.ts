@@ -5,8 +5,11 @@ import {
   processNewEntries,
   updateStatsWithNewEntries,
   initializeBaseline,
+  parseCharacterLeagueData,
+  detectCharacterChange,
   type RustBattleEntry,
   type MatchData,
+  type CharacterLeagueData,
 } from "./utils";
 
 // ============================================================
@@ -426,5 +429,179 @@ describe("initializeBaseline", () => {
     const prevCopy = JSON.parse(JSON.stringify(prev));
     initializeBaseline(prev, 1800, "MR");
     expect(prev).toEqual(prevCopy);
+  });
+});
+
+// ============================================================
+// parseCharacterLeagueData
+// ============================================================
+
+function makeNextDataHtml(characterLeagueInfos: unknown[]): string {
+  const nextData = {
+    props: {
+      pageProps: {
+        play: {
+          character_league_infos: characterLeagueInfos,
+        },
+      },
+    },
+  };
+  return `<html><head></head><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script></body></html>`;
+}
+
+describe("parseCharacterLeagueData", () => {
+  it("extracts character name, league points, and master rating", () => {
+    const html = makeNextDataHtml([
+      {
+        character_alpha: "KEN",
+        league_info: { league_point: 22620, master_rating: 0 },
+      },
+      {
+        character_alpha: "ZANGIEF",
+        league_info: { league_point: 17838, master_rating: 0 },
+      },
+    ]);
+    const result = parseCharacterLeagueData(html);
+    expect(result).toEqual([
+      { character: "KEN", leaguePoint: 22620, masterRate: 0 },
+      { character: "ZANGIEF", leaguePoint: 17838, masterRate: 0 },
+    ]);
+  });
+
+  it("handles master rating values", () => {
+    const html = makeNextDataHtml([
+      {
+        character_alpha: "RYU",
+        league_info: { league_point: 25000, master_rating: 1800 },
+      },
+    ]);
+    const result = parseCharacterLeagueData(html);
+    expect(result).toEqual([
+      { character: "RYU", leaguePoint: 25000, masterRate: 1800 },
+    ]);
+  });
+
+  it("treats league_point -1 as unplayed (returns -1)", () => {
+    const html = makeNextDataHtml([
+      {
+        character_alpha: "LUKE",
+        league_info: { league_point: -1, master_rating: 0 },
+      },
+    ]);
+    const result = parseCharacterLeagueData(html);
+    expect(result).toEqual([
+      { character: "LUKE", leaguePoint: -1, masterRate: 0 },
+    ]);
+  });
+
+  it("returns empty array when no __NEXT_DATA__ script found", () => {
+    const html = "<html><body>no data</body></html>";
+    const result = parseCharacterLeagueData(html);
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array when character_league_infos is missing", () => {
+    const nextData = { props: { pageProps: { play: {} } } };
+    const html = `<html><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(nextData)}</script></html>`;
+    const result = parseCharacterLeagueData(html);
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array for invalid JSON", () => {
+    const html = `<html><script id="__NEXT_DATA__" type="application/json">{broken json</script></html>`;
+    const result = parseCharacterLeagueData(html);
+    expect(result).toEqual([]);
+  });
+
+  it("handles multiple characters with mixed data", () => {
+    const html = makeNextDataHtml([
+      { character_alpha: "KEN", league_info: { league_point: 22620, master_rating: 0 } },
+      { character_alpha: "RYU", league_info: { league_point: -1, master_rating: 0 } },
+      { character_alpha: "JURI", league_info: { league_point: 30000, master_rating: 2100 } },
+    ]);
+    const result = parseCharacterLeagueData(html);
+    expect(result).toHaveLength(3);
+    expect(result[0]).toEqual({ character: "KEN", leaguePoint: 22620, masterRate: 0 });
+    expect(result[1]).toEqual({ character: "RYU", leaguePoint: -1, masterRate: 0 });
+    expect(result[2]).toEqual({ character: "JURI", leaguePoint: 30000, masterRate: 2100 });
+  });
+
+  it("handles empty character_league_infos array", () => {
+    const html = makeNextDataHtml([]);
+    const result = parseCharacterLeagueData(html);
+    expect(result).toEqual([]);
+  });
+});
+
+// ============================================================
+// detectCharacterChange
+// ============================================================
+
+function makeLeague(character: string, lp: number, mr: number): CharacterLeagueData {
+  return { character, leaguePoint: lp, masterRate: mr };
+}
+
+describe("detectCharacterChange", () => {
+  it("detects LP change for a character", () => {
+    const prev = [makeLeague("KEN", 22620, 0), makeLeague("RYU", -1, 0)];
+    const curr = [makeLeague("KEN", 22400, 0), makeLeague("RYU", -1, 0)];
+    const result = detectCharacterChange(prev, curr);
+    expect(result).toEqual({ character: "KEN", currentLP: 22400, currentMR: 0 });
+  });
+
+  it("detects MR change for a character", () => {
+    const prev = [makeLeague("JURI", 25000, 1800)];
+    const curr = [makeLeague("JURI", 25000, 1850)];
+    const result = detectCharacterChange(prev, curr);
+    expect(result).toEqual({ character: "JURI", currentLP: 25000, currentMR: 1850 });
+  });
+
+  it("detects when both LP and MR change simultaneously", () => {
+    const prev = [makeLeague("JURI", 25000, 1800)];
+    const curr = [makeLeague("JURI", 25100, 1850)];
+    const result = detectCharacterChange(prev, curr);
+    expect(result).toEqual({ character: "JURI", currentLP: 25100, currentMR: 1850 });
+  });
+
+  it("returns null when nothing changed", () => {
+    const prev = [makeLeague("KEN", 22620, 0), makeLeague("RYU", -1, 0)];
+    const curr = [makeLeague("KEN", 22620, 0), makeLeague("RYU", -1, 0)];
+    expect(detectCharacterChange(prev, curr)).toBeNull();
+  });
+
+  it("ignores LP change when LP is -1 (unplayed)", () => {
+    const prev = [makeLeague("RYU", -1, 0)];
+    const curr = [makeLeague("RYU", -1, 0)];
+    expect(detectCharacterChange(prev, curr)).toBeNull();
+  });
+
+  it("ignores MR change when MR is 0", () => {
+    const prev = [makeLeague("KEN", 22620, 0)];
+    const curr = [makeLeague("KEN", 22620, 0)];
+    expect(detectCharacterChange(prev, curr)).toBeNull();
+  });
+
+  it("detects change in second character when first is unchanged", () => {
+    const prev = [makeLeague("KEN", 22620, 0), makeLeague("ZANGIEF", 17838, 0)];
+    const curr = [makeLeague("KEN", 22620, 0), makeLeague("ZANGIEF", 17600, 0)];
+    const result = detectCharacterChange(prev, curr);
+    expect(result).toEqual({ character: "ZANGIEF", currentLP: 17600, currentMR: 0 });
+  });
+
+  it("returns first changed character when multiple change", () => {
+    const prev = [makeLeague("KEN", 22620, 0), makeLeague("ZANGIEF", 17838, 0)];
+    const curr = [makeLeague("KEN", 22800, 0), makeLeague("ZANGIEF", 17600, 0)];
+    const result = detectCharacterChange(prev, curr);
+    expect(result!.character).toBe("KEN");
+  });
+
+  it("handles empty arrays", () => {
+    expect(detectCharacterChange([], [])).toBeNull();
+  });
+
+  it("handles new character not in previous", () => {
+    const prev = [makeLeague("KEN", 22620, 0)];
+    const curr = [makeLeague("KEN", 22620, 0), makeLeague("RYU", 5000, 0)];
+    expect(detectCharacterChange(prev, curr)).toBeNull();
   });
 });
